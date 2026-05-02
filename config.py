@@ -19,20 +19,21 @@ class Config:
     max_seq_len      : int   = 512
     dropout          : float = 0.1
 
-    # === ENTRAÎNEMENT ===
-    batch_size       : int   = 16
+    # === ENTRAÎNEMENT (adapté A100 40GB) ===
+    batch_size       : int   = 32       # ↑ A100 = plus de VRAM que 4060
     learning_rate    : float = 3e-4
     warmup_steps     : int   = 300
     max_steps        : int   = 3_000
     weight_decay     : float = 0.1
     grad_clip        : float = 1.0
-    grad_accum       : int   = 2
+    grad_accum       : int   = 1        # ↓ batch déjà gros
 
-    # === H100 ===
-    dtype            : str   = "bfloat16"
+    # === MULTI-GPU 2x A100 SXM4 40GB ===
+    dtype            : str   = "bfloat16"  # A100 supporte BF16 ✅
     compile_model    : bool  = True
     tf32             : bool  = True
-    parallel_experts : int   = 50
+    n_gpus           : int   = 2           # ← NOUVEAU
+    parallel_experts : int   = 80          # 40 par GPU (~40GB chacun)
 
     # === CLUSTERING ===
     n_clusters       : int   = 2_000
@@ -45,7 +46,7 @@ class Config:
     router_epochs    : int   = 10
 
     # === CACHE INFERENCE ===
-    cache_size       : int   = 100   # experts en mémoire max
+    cache_size       : int   = 100
 
     # === CHEMINS ===
     data_dir         : Path  = field(default_factory=lambda: Path("./data"))
@@ -57,13 +58,11 @@ class Config:
     save_every       : int   = 500
 
     def __post_init__(self):
-        # Crée tous les dossiers automatiquement
         for d in [self.data_dir, self.models_dir,
                   self.cluster_dir, self.tokenizer_dir,
                   self.log_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Active TF32 si dispo
         if self.tf32 and torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32        = True

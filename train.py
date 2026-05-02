@@ -196,20 +196,88 @@ def train_one_expert(expert_id: int,
 
 # ─── ENTRAÎNEMENT DE TOUS LES EXPERTS ────────────────────────────────────────
 
+# train.py - Remplacer train_all_experts par cette version multi-GPU
+
+import torch.multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+
+def _train_worker(args):
+    """Worker qui tourne sur un GPU spécifique."""
+    expert_id, codes, tokenizer, gpu_id, save_dir = args
+    device = f"cuda:{gpu_id}"
+    torch.cuda.set_device(gpu_id)
+    
+    return train_one_expert(
+        expert_id=expert_id,
+        codes=codes,
+        tokenizer=tokenizer,
+        device=device,
+        save_dir=save_dir
+    )
+
+
 def train_all_experts(clusters: dict,
                       tokenizer,
                       device: str,
                       save_dir: Path) -> list:
-
+    """Distribue les experts sur les 2 GPUs en parallèle."""
+    
     save_dir.mkdir(parents=True, exist_ok=True)
+    
+    n_gpus = torch.cuda.device_count()
+    logger.info(f"\n🚀 Multi-GPU détecté : {n_gpus} GPUs")
+    
+    if n_gpus < 2:
+        logger.warning("Moins de 2 GPU → mode single GPU")
+        return _train_all_single_gpu(clusters, tokenizer, device, save_dir)
+    
+    ids   = sorted(clusters.keys())
+    total = len(ids)
+    results = []
+    start = time.time()
+    
+    logger.info(f"Distribution de {total} experts sur {n_gpus} GPUs")
+    
+    # Round-robin : expert i → gpu (i % n_gpus)
+    tasks = [
+        (eid, clusters[eid], tokenizer, eid % n_gpus, save_dir)
+        for eid in ids
+    ]
+    
+    # mp.set_start_method('spawn', force=True) → à mettre dans run_all
+    with ProcessPoolExecutor(max_workers=n_gpus) as executor:
+        futures = {executor.submit(_train_worker, t): t[0] for t in tasks}
+        
+        done = 0
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                eid = futures[future]
+                logger.error(f"Expert {eid} crash : {e}")
+                results.append({"id": eid, "status": "error", "error": str(e)})
+            
+            done += 1
+            if done % 20 == 0:
+                elapsed = time.time() - start
+                eta = elapsed / done * (total - done)
+                ok = sum(1 for r in results if r["status"] == "done")
+                logger.info(
+                    f"[{done}/{total}] OK={ok} "
+                    f"Elapsed={elapsed/60:.0f}min ETA={eta/60:.0f}min"
+                )
+    
+    return results
 
+
+def _train_all_single_gpu(clusters, tokenizer, device, save_dir):
+    """Fallback single GPU (code original)."""
     ids     = sorted(clusters.keys())
     total   = len(ids)
     results = []
-    done    = 0
     start   = time.time()
-
-    logger.info(f"\n Entraînement de {total} experts sur {device}")
 
     for expert_id in tqdm(ids, desc="Experts"):
         result = train_one_expert(
@@ -220,24 +288,9 @@ def train_all_experts(clusters: dict,
             save_dir=save_dir
         )
         results.append(result)
-        done += 1
-
-        if done % 10 == 0:
-            elapsed = time.time() - start
-            eta     = elapsed / done * (total - done)
-            ok  = sum(1 for r in results if r["status"] == "done")
-            oom = sum(1 for r in results if r["status"] == "oom")
-            logger.info(
-                f"[{done}/{total}] OK={ok} OOM={oom} "
-                f"Elapsed={elapsed/60:.0f}min ETA={eta/60:.0f}min"
-            )
-
-        # Vide le cache GPU régulièrement
-        if done % 5 == 0 and "cuda" in device:
+        if "cuda" in device:
             torch.cuda.empty_cache()
-
     return results
-
 
 # ─── ROUTER ──────────────────────────────────────────────────────────────────
 

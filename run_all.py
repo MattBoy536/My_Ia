@@ -10,6 +10,13 @@ from super_tokenizer import build_tokenizer
 from cluster         import load_codes, cluster_codes
 from train           import train_all_experts, train_router
 from inference       import MoEInference
+import torch.multiprocessing as mp
+
+if __name__ == "__main__":
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,12 +31,16 @@ logger = logging.getLogger(__name__)
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
-        name = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
-        logger.info(f"GPU : {name} ({vram:.1f} GB VRAM)")
-        return torch.device("cuda")
-    logger.warning("Pas de GPU → CPU (très lent)")
+        n = torch.cuda.device_count()
+        for i in range(n):
+            name = torch.cuda.get_device_name(i)
+            vram = torch.cuda.get_device_properties(i).total_memory / 1e9
+            logger.info(f"GPU {i} : {name} ({vram:.1f} GB VRAM)")
+        logger.info(f"Total : {n} GPU(s)")
+        return torch.device("cuda:0")
+    logger.warning("Pas de GPU → CPU")
     return torch.device("cpu")
+
 
 
 def print_summary(results: list, t_total: float):
