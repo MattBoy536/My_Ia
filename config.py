@@ -1,7 +1,8 @@
 # config.py
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import torch
+
 
 @dataclass
 class Config:
@@ -19,21 +20,21 @@ class Config:
     max_seq_len      : int   = 512
     dropout          : float = 0.1
 
-    # === ENTRAÎNEMENT (adapté A100 40GB) ===
-    batch_size       : int   = 32       # ↑ A100 = plus de VRAM que 4060
+    # === ENTRAÎNEMENT (2x A100 40GB) ===
+    batch_size       : int   = 32
     learning_rate    : float = 3e-4
     warmup_steps     : int   = 300
     max_steps        : int   = 3_000
     weight_decay     : float = 0.1
     grad_clip        : float = 1.0
-    grad_accum       : int   = 1        # ↓ batch déjà gros
+    grad_accum       : int   = 1
 
-    # === MULTI-GPU 2x A100 SXM4 40GB ===
-    dtype            : str   = "bfloat16"  # A100 supporte BF16 ✅
+    # === MULTI-GPU ===
+    dtype            : str   = "bfloat16"
     compile_model    : bool  = True
     tf32             : bool  = True
-    n_gpus           : int   = 2           # ← NOUVEAU
-    parallel_experts : int   = 80          # 40 par GPU (~40GB chacun)
+    n_gpus           : int   = 2
+    expert_timeout   : int   = 1800   # 30min max par expert
 
     # === CLUSTERING ===
     n_clusters       : int   = 2_000
@@ -43,28 +44,40 @@ class Config:
     # === ROUTER ===
     top_k_experts    : int   = 20
     router_hidden    : int   = 512
-    router_epochs    : int   = 10
+    router_epochs    : int   = 5
+    router_batch     : int   = 64
 
-    # === CACHE INFERENCE ===
-    cache_size       : int   = 100
+    # === INFERENCE ===
+    cache_size       : int   = 1024
+    temperature      : float = 0.8
+    top_p            : float = 0.9
+    max_gen_tokens   : int   = 256
 
     # === CHEMINS ===
-    data_dir         : Path  = field(default_factory=lambda: Path("./data"))
-    models_dir       : Path  = field(default_factory=lambda: Path("./models"))
-    cluster_dir      : Path  = field(default_factory=lambda: Path("./clusters"))
-    tokenizer_dir    : Path  = field(default_factory=lambda: Path("./tokenizer"))
-    log_dir          : Path  = field(default_factory=lambda: Path("./logs"))
+    base_dir         : Path  = Path("./workspace")
+    data_dir         : Path  = Path("./workspace/data")
+    tokenizer_dir    : Path  = Path("./workspace/tokenizer")
+    cluster_dir      : Path  = Path("./workspace/clusters")
+    experts_dir      : Path  = Path("./workspace/experts")
+    router_dir       : Path  = Path("./workspace/router")
+    log_dir          : Path  = Path("./workspace/logs")
 
-    save_every       : int   = 500
+    # === HUGGINGFACE ===
+    hf_dataset       : str   = "codeparrot/codeparrot-clean"
+    hf_token_env     : str   = "HF_TOKEN"
 
     def __post_init__(self):
-        for d in [self.data_dir, self.models_dir,
-                  self.cluster_dir, self.tokenizer_dir,
+        for p in [self.base_dir, self.data_dir, self.tokenizer_dir,
+                  self.cluster_dir, self.experts_dir, self.router_dir,
                   self.log_dir]:
-            d.mkdir(parents=True, exist_ok=True)
+            p.mkdir(parents=True, exist_ok=True)
 
-        if self.tf32 and torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32        = True
+    def torch_dtype(self):
+        return {
+            "float32" : torch.float32,
+            "float16" : torch.float16,
+            "bfloat16": torch.bfloat16,
+        }[self.dtype]
+
 
 CFG = Config()
